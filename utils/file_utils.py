@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
-from models import Course, Section, Lecture, Subtitle
+from core.models import Course, Section, Lecture, Subtitle
 
 class MarkdownGenerator:
     def __init__(self, log_callback=None):
@@ -355,5 +355,41 @@ class MarkdownGenerator:
             
         except Exception:
             return 0
+
+
+def ensure_directory(directory_path):
+    """디렉토리 생성 (존재하지 않는 경우)"""
+    try:
+        Path(directory_path).mkdir(parents=True, exist_ok=True)
+        return True
+    except Exception as e:
+        return False
+
+
+def sanitize_filename(filename: str) -> str:
+    """파일명에 사용할 수 없는 문자 제거"""
+    try:
+        # 파일명에 사용할 수 없는 문자들 제거
+        invalid_chars = r'[<>:"/\\|?*]'
+        sanitized = re.sub(invalid_chars, '', filename)
+
+        # 연속된 공백을 하나로 줄임
+        sanitized = re.sub(r'\s+', ' ', sanitized)
+
+        # 앞뒤 공백 제거
+        sanitized = sanitized.strip()
+
+        # 길이 제한 (50자)
+        if len(sanitized) > 50:
+            sanitized = sanitized[:47] + "..."
+
+        # 빈 문자열인 경우 기본값
+        if not sanitized:
+            sanitized = "제목없음"
+
+        return sanitized
+
+    except Exception:
+        return "제목없음"
 
 

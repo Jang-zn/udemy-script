@@ -5,11 +5,11 @@ Udemy 스크래퍼 메인 워크플로우 컨트롤러
 import time
 from typing import Callable, Optional
 from config import Config
-from auth import UdemyAuth
-from navigation import UdemyNavigator
-from scraper import SubtitleScraper
-from file_utils import MarkdownGenerator
-from models import Course, ScrapingProgress
+from browser.auth import UdemyAuth
+from browser.navigation import UdemyNavigator
+from browser.scraper import SubtitleScraper
+from utils.file_utils import MarkdownGenerator
+from core.models import Course, ScrapingProgress
 
 class UdemyScraperApp:
     def __init__(self, 
