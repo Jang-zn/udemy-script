@@ -14,15 +14,13 @@ sys.path.insert(0, str(current_dir))
 def main():
     """메인 함수"""
     try:
-        from gui.ui import UdemyScraperGUI
-
-        # GUI 시작
-        app = UdemyScraperGUI()
-        app.run()
+        from gui.pyside_ui import run_pyside_gui
+        print("🚀 Udemy Scraper GUI 시작...")
+        run_pyside_gui()
 
     except ImportError as e:
         print(f"❌ 모듈 import 실패: {str(e)}")
-        print("📦 필요한 패키지를 설치하세요: pip install -r requirements.txt")
+        print("📦 PySide6를 설치하세요: pip3 install pyside6")
         sys.exit(1)
     except Exception as e:
         print(f"❌ 애플리케이션 시작 실패: {str(e)}")

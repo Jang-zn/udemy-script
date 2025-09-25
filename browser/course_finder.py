@@ -136,8 +136,8 @@ class CourseFinder(BrowserBase):
             search_input.clear()
             search_input.send_keys(course_name)
 
-            # 입력 완료 후 잠시 대기 (검색 필드 처리 시간)
-            time.sleep(0.2)
+            # 입력 완료 후 대기 (검색 필드 처리 시간)
+            time.sleep(2)
 
             # 3. 검색 버튼 클릭
             if not self._click_search_button():
