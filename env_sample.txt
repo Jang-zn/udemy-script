@@ -1,0 +1,10 @@
+# Udemy 계정 정보 (선택사항 - GUI에서 직접 입력 가능)
+UDEMY_EMAIL=your_email@example.com
+UDEMY_PASSWORD=your_password
+
+# 기본 설정
+OUTPUT_DIR=output_udemy_scripts
+HEADLESS_MODE=false
+DEBUG_MODE=true
+
+

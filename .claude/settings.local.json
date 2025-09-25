@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.udemy.com)",
+      "WebSearch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
