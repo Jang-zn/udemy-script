@@ -565,6 +565,76 @@ class CourseFinder(BrowserBase):
         except:
             return 0.0
 
+    def find_and_scrape_course(self, course_name: str, progress_callback=None, status_callback=None) -> bool:
+        """강의를 검색하고 바로 스크래핑 진행"""
+        try:
+            # 1. 강의 검색
+            self.log_callback(f"🔍 '{course_name}' 강의 검색 중...")
+
+            # 검색 필드 찾기
+            search_field = self._find_search_input()
+            if not search_field:
+                self.log_callback("❌ 검색 필드를 찾을 수 없습니다")
+                return False
+
+            # 검색어 입력
+            search_field.clear()
+            search_field.send_keys(course_name)
+            time.sleep(1)
+
+            # 검색 버튼 클릭
+            if not self._click_search_button():
+                self.log_callback("❌ 검색 버튼을 찾을 수 없습니다")
+                return False
+
+            # 검색 결과 대기
+            self._wait_for_search_results(course_name)
+
+            # 강의 카드 찾기
+            course_cards = self._find_course_cards()
+            if not course_cards:
+                self.log_callback(f"❌ '{course_name}' 검색 결과가 없습니다")
+                return False
+
+            # 첫 번째 강의 카드 클릭 (검색 결과 중 첫 번째)
+            first_card = course_cards[0]
+            self.log_callback(f"🎯 첫 번째 강의 선택")
+            first_card.click()
+            time.sleep(3)
+
+            # 2. 강의 페이지에서 스크래핑 진행
+            self.log_callback("📝 강의 내용 스크래핑 시작...")
+
+            from browser.navigation import UdemyNavigator
+            from core.models import Course
+
+            # 강의 정보 수집
+            course = Course(name=course_name)
+            navigator = UdemyNavigator(self.driver, self.wait, self.log_callback)
+            scraper = SubtitleScraper(self.driver, self.wait, self.log_callback)
+
+            # 커리큘럼 분석
+            if not navigator.analyze_curriculum(course):
+                self.log_callback("❌ 강의 구조를 파싱할 수 없습니다")
+                return False
+
+            total_lectures = sum(len(section.lectures) for section in course.sections)
+            self.log_callback(f"✅ {len(course.sections)}개 섹션, {total_lectures}개 강의 발견")
+
+            # 전체 스크래핑 워크플로우 실행
+            success = navigator.start_complete_scraping_workflow(course)
+
+            if success:
+                self.log_callback(f"💾 '{course_name}' 스크래핑 완료")
+            else:
+                self.log_callback(f"❌ '{course_name}' 스크래핑 실패")
+
+            return True
+
+        except Exception as e:
+            self.log_callback(f"❌ 강의 검색 및 스크래핑 실패: {str(e)}")
+            return False
+
     def _list_available_courses(self, course_cards: List):
         """사용 가능한 강의 목록 출력"""
         try:

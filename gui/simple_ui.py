@@ -73,12 +73,6 @@ class SimpleUdemyGUI(QMainWindow):
         input_layout.addWidget(self.course_input)
         layout.addLayout(input_layout)
 
-        # 스크래핑 버튼
-        self.scrape_btn = QPushButton("스크래핑 시작")
-        self.scrape_btn.clicked.connect(self.start_scraping)
-        self.scrape_btn.setEnabled(False)
-        layout.addWidget(self.scrape_btn)
-
         # 진행률
         self.progress = QProgressBar()
         layout.addWidget(self.progress)
@@ -123,9 +117,14 @@ class SimpleUdemyGUI(QMainWindow):
         threading.Thread(target=run, daemon=True).start()
 
     def connect_browser(self):
-        """브라우저 연결"""
+        """브라우저 연결하고 바로 스크래핑 시작"""
+        course_name = self.course_input.text().strip()
+        if not course_name:
+            self.emit_log("❌ 강의명을 먼저 입력하세요")
+            return
+
         self.connect_btn.setEnabled(False)
-        self.status.setText("브라우저 연결 중...")
+        self.status.setText("브라우저 연결 및 스크래핑 진행 중...")
 
         def run():
             try:
@@ -141,9 +140,20 @@ class SimpleUdemyGUI(QMainWindow):
                     my_learning = finder.go_to_my_learning()
 
                     if my_learning:
-                        self.emit_status("준비 완료 - 강의명 입력 후 스크래핑 시작")
-                        self.scrape_btn.setEnabled(True)
-                        self.emit_log("🎯 준비 완료! 강의명을 입력하고 스크래핑 시작하세요")
+                        self.emit_status("스크래핑 진행 중...")
+                        self.emit_log("🔍 강의 검색 및 스크래핑 시작...")
+
+                        # 바로 강의 검색하고 스크래핑 진행
+                        success = finder.find_and_scrape_course(course_name,
+                                                               self.emit_progress,
+                                                               self.emit_status)
+
+                        if success:
+                            self.emit_status("스크래핑 완료!")
+                            self.emit_log("🎉 스크래핑이 완료되었습니다!")
+                        else:
+                            self.emit_status("스크래핑 실패")
+                            self.emit_log("❌ 스크래핑에 실패했습니다")
                     else:
                         self.emit_status("로그인 후 다시 연결하세요")
                         self.emit_log("⚠️ 로그인이 필요합니다")
@@ -157,39 +167,6 @@ class SimpleUdemyGUI(QMainWindow):
 
         threading.Thread(target=run, daemon=True).start()
 
-    def start_scraping(self):
-        """스크래핑 시작"""
-        course_name = self.course_input.text().strip()
-        if not course_name:
-            self.emit_log("❌ 강의명을 입력하세요")
-            return
-
-        self.scrape_btn.setEnabled(False)
-        self.status.setText("스크래핑 진행 중...")
-
-        def run():
-            try:
-                app = UdemyScraperApp(
-                    progress_callback=self.emit_progress,
-                    status_callback=self.emit_status,
-                    log_callback=self.emit_log
-                )
-
-                success = app.run_workflow("", "", course_name)
-
-                if success:
-                    self.emit_status("스크래핑 완료!")
-                    self.emit_log("🎉 스크래핑이 완료되었습니다!")
-                else:
-                    self.emit_status("스크래핑 실패")
-                    self.emit_log("❌ 스크래핑에 실패했습니다")
-
-            except Exception as e:
-                self.emit_log(f"❌ 오류: {e}")
-            finally:
-                self.scrape_btn.setEnabled(True)
-
-        threading.Thread(target=run, daemon=True).start()
 
     def reset_all(self):
         """초기화"""
@@ -197,7 +174,6 @@ class SimpleUdemyGUI(QMainWindow):
         self.progress.setValue(0)
         self.status.setText("준비")
         self.log.clear()
-        self.scrape_btn.setEnabled(False)
         self.emit_log("🔄 초기화 완료")
 
     def emit_log(self, message):
