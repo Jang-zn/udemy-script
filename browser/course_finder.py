@@ -38,20 +38,23 @@ class CourseFinder(BrowserBase):
 
             # 3. 드롭다운 메뉴 또는 직접 링크에서 "내 학습" 버튼 찾아서 클릭
             my_learning_selectors = [
-                # 드롭다운 메뉴 내의 정확한 선택자 (제공된 HTML 기준)
-                "a[href='/home/my-courses/'] .ud-block-list-item-content",
+                # 사용자가 제공한 실제 HTML 기준 선택자들
+                "a[href='/home/my-courses/'][data-testid='my-courses']",
+                "a[data-testid='my-courses']",
                 "a[href='/home/my-courses/']",
 
-                # 다양한 내 학습 링크
+                # XPath 선택자들 (CSS :contains 대신)
                 "//a[contains(text(), '내 학습')]",
                 "//a[contains(text(), 'My learning')]",
                 "//a[contains(@href, '/home/my-courses')]",
-                ".ud-block-list-item-content:contains('내 학습')",
+                "//span[contains(text(), '내 학습')]/..",
+                "//span[contains(text(), '내 학습으로 이동')]/..",
 
                 # 헤더의 직접 링크들
                 "[data-purpose='my-learning-nav']",
                 ".header-my-learning",
-                "a[href*='my-courses']"
+                "a[href*='my-courses']",
+                ".ud-btn[href='/home/my-courses/']"
             ]
 
             button_clicked = False

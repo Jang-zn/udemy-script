@@ -401,6 +401,47 @@ class UdemyAuth:
         except Exception as e:
             self.log_callback(f"⚠️ 브라우저 정리 중 오류: {str(e)}")
 
+    def launch_debug_browser(self):
+        """디버깅 브라우저 실행"""
+        try:
+            from browser.manager import ExistingBrowserManager
+
+            manager = ExistingBrowserManager(log_callback=self.log_callback)
+            success = manager.start_chrome_with_debug_port()
+
+            if success:
+                self.log_callback("✅ Chrome 디버깅 브라우저 실행 완료")
+                return True
+            else:
+                self.log_callback("❌ Chrome 디버깅 브라우저 실행 실패")
+                return False
+
+        except Exception as e:
+            self.log_callback(f"❌ 디버깅 브라우저 실행 중 오류: {str(e)}")
+            return False
+
+    def connect_to_existing_browser(self):
+        """기존 디버깅 브라우저에 연결"""
+        try:
+            from browser.manager import ExistingBrowserManager
+
+            manager = ExistingBrowserManager(log_callback=self.log_callback)
+            success = manager.connect_to_existing_browser()
+
+            if success:
+                # 드라이버 객체를 가져와서 설정
+                self.driver = manager.driver
+                self.wait = WebDriverWait(self.driver, 10)
+                self.log_callback("✅ 기존 브라우저 연결 완료")
+                return True
+            else:
+                self.log_callback("❌ 기존 브라우저 연결 실패")
+                return False
+
+        except Exception as e:
+            self.log_callback(f"❌ 브라우저 연결 중 오류: {str(e)}")
+            return False
+
     def __del__(self):
         """소멸자"""
         self.cleanup()
