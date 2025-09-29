@@ -14,6 +14,7 @@ from .element_finder import ElementFinder, ClickHandler, SectionNavigator
 from .transcript_extractor import TranscriptExtractor, VideoNavigator
 from .selectors import UdemySelectors
 from .smart_waiter import SmartWaiter
+from section_merger import SectionMerger
 
 
 class TranscriptScraper(BrowserBase):
@@ -133,7 +134,13 @@ class TranscriptScraper(BrowserBase):
                 return False
 
             # 2. 섹션 내 비디오들 처리
-            return self._process_section_videos(section, section_idx)
+            videos_success = self._process_section_videos(section, section_idx)
+
+            # 3. 섹션 처리가 성공했으면 섹션별 통합 파일 생성
+            if videos_success:
+                self._create_section_merged_file(section_idx)
+
+            return videos_success
 
         except Exception as e:
             self.log_callback(f"❌ 섹션 {section_idx + 1} 처리 실패: {str(e)}")
@@ -588,3 +595,45 @@ class TranscriptScraper(BrowserBase):
 
         except Exception as e:
             self.log_callback(f"      ❌ 클릭 실패 디버깅 오류: {str(e)}")
+
+    def _create_section_merged_file(self, section_idx: int):
+        """섹션별 통합 파일 생성"""
+        try:
+            if not self.current_course:
+                return
+
+            from pathlib import Path
+
+            # 강의 디렉토리 경로
+            output_dir = Path("output")
+            safe_course_name = sanitize_filename(self.current_course.title)
+            course_dir = output_dir / safe_course_name
+
+            # 섹션 디렉토리 경로
+            if section_idx < len(self.current_course.sections):
+                section_title = self.current_course.sections[section_idx].title
+                safe_section_title = sanitize_filename(section_title)
+                section_dir = course_dir / f"Section_{section_idx + 1:02d}_{safe_section_title}"
+            else:
+                return
+
+            # 섹션 디렉토리에 txt 파일이 있는지 확인
+            if not section_dir.exists():
+                return
+
+            txt_files = list(section_dir.glob("*.txt"))
+            if not txt_files:
+                self.log_callback(f"    ⚠️ 섹션 {section_idx + 1}: 통합할 자막 파일이 없습니다")
+                return
+
+            self.log_callback(f"    📚 섹션 {section_idx + 1} 통합 파일 생성 중... ({len(txt_files)}개 파일)")
+
+            # SectionMerger를 사용하여 섹션별 통합 파일 생성
+            merger = SectionMerger(str(course_dir))
+            if merger._merge_section(section_dir):
+                self.log_callback(f"    ✅ 섹션 {section_idx + 1} 통합 파일 생성 완료")
+            else:
+                self.log_callback(f"    ⚠️ 섹션 {section_idx + 1} 통합 파일 생성 실패")
+
+        except Exception as e:
+            self.log_callback(f"    ❌ 섹션 {section_idx + 1} 통합 파일 생성 중 오류: {str(e)}")

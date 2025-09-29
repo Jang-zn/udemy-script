@@ -623,6 +623,7 @@ class CourseFinder(BrowserBase):
             self.log_callback("📝 강의 내용 스크래핑 시작...")
 
             from browser.navigation import UdemyNavigator
+            from browser.transcript_scraper import TranscriptScraper
             from core.models import Course
 
             # 강의 정보 수집
@@ -632,15 +633,13 @@ class CourseFinder(BrowserBase):
             # 🔧 수정: 상태 체크를 먼저 하고 섹션 영역 확인 후 스크래핑 진행
             self.log_callback("🔍 강의 페이지 상태 체크 및 섹션 영역 확인...")
 
-            # 1. 먼저 트랜스크립트 패널 상태 체크하고 normal body 상태로 맞춤
-            state_changed = navigator._ensure_normal_body_state_and_check_sections()
-
-            # 2. 섹션 영역이 제대로 보이는지 확인하고 커리큘럼 분석
+            # 1. 섹션 영역이 제대로 보이는지 확인하고 커리큘럼 분석
             success = navigator.analyze_curriculum(course)
 
-            # 3. 분석 완료 후 스크래핑 워크플로우 시작
+            # 2. 분석 완료 후 스크래핑 워크플로우 시작 (TranscriptScraper 사용)
             if success:
-                success = navigator.start_complete_scraping_workflow(course)
+                scraper = TranscriptScraper(self.driver, self.wait, self.log_callback)
+                success = scraper.start_complete_scraping_workflow(course)
 
             if success:
                 self.log_callback(f"💾 '{course_name}' 스크래핑 완료")
