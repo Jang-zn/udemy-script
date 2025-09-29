@@ -63,19 +63,12 @@ class UdemyScraperApp:
             if not self._analyze_course_structure(course):
                 return False
 
-            # 4. 자막 추출
+            # 4. 자막 추출 (파일 저장과 섹션 병합 포함)
             self.status_callback("자막 추출 시작...")
             if not self._extract_all_subtitles(course):
                 return False
 
-            # 5. 파일 저장
-            self.status_callback("파일 저장 중...")
-            if not self._save_course_files(course, course_name):
-                return False
-
-            # 6. 섹션별 통합 대본 생성
-            self.status_callback("섹션별 통합 대본 생성 중...")
-            self._create_section_merged_files(course_name)
+            # 파일 저장과 섹션 병합은 _extract_all_subtitles에서 이미 처리됨
 
             self.log_callback("🎉 모든 작업이 완료되었습니다!")
             return True
@@ -185,6 +178,10 @@ class UdemyScraperApp:
                     self.progress.total_lectures
                 )
                 self.log_callback("✅ 모든 강의 자막 추출 완료")
+
+                # 자막 추출 완료 후 즉시 섹션별 통합 대본 생성
+                self.log_callback("📚 섹션별 통합 대본 생성 중...")
+                self._create_section_merged_files(course.title)
             else:
                 self.log_callback("❌ 자막 추출 중 오류 발생")
 
