@@ -63,21 +63,30 @@ class UdemyNavigator:
                     from selenium.webdriver.common.action_chains import ActionChains
                     actions = ActionChains(self.driver)
                     actions.move_to_element(video_area).perform()
-                    time.sleep(1)
+                    time.sleep(0.5)  # 1초에서 0.5초로 단축
 
                 try:
                     transcript_button.click()
-                    time.sleep(2)  # 패널 닫히는 시간 대기
-                    self.log_callback("     ✅ 트랜스크립트 패널 닫기 완료 → 섹션 영역 표시")
-                    return True  # 상태 변경됨
+                    # 스마트 대기: 패널이 실제로 닫힐 때까지 대기
+                    if self._wait_for_panel_close(transcript_button):
+                        self.log_callback("     ✅ 트랜스크립트 패널 닫기 완료 → 섹션 영역 표시")
+                        return True
+                    else:
+                        time.sleep(1)  # 폴백 대기
+                        self.log_callback("     ✅ 트랜스크립트 패널 닫기 완료 (폴백)")
+                        return True
                 except Exception as e:
                     self.log_callback(f"     ❌ 패널 닫기 실패: {str(e)}")
                     try:
                         # JavaScript로 클릭 시도
                         self.driver.execute_script("arguments[0].click();", transcript_button)
-                        time.sleep(2)
-                        self.log_callback("     ✅ JavaScript로 패널 닫기 완료 → 섹션 영역 표시")
-                        return True
+                        if self._wait_for_panel_close(transcript_button):
+                            self.log_callback("     ✅ JavaScript로 패널 닫기 완료 → 섹션 영역 표시")
+                            return True
+                        else:
+                            time.sleep(1)  # 폴백 대기
+                            self.log_callback("     ✅ JavaScript로 패널 닫기 완료 (폴백)")
+                            return True
                     except Exception as e2:
                         self.log_callback(f"     ❌ JavaScript 클릭도 실패: {str(e2)}")
                         return False
@@ -90,56 +99,31 @@ class UdemyNavigator:
             return False
 
     def _find_transcript_button(self):
-        """트랜스크립트 버튼 찾기 (호버 상태 유지)"""
+        """트랜스크립트 버튼 찾기 (최적화된 호버 및 대기)"""
         try:
-            import time
-            # 페이지 로딩 대기 (3초로 단축)
-            time.sleep(1)
-
-            # 비디오 영역 찾기
-            video_area = self._find_video_area()
-            if not video_area:
-                return None
-
-            from selenium.webdriver.common.action_chains import ActionChains
-            actions = ActionChains(self.driver)
-
-            # 비디오 영역에 마우스 이동하고 호버 상태 유지
-            actions.move_to_element(video_area).perform()
-            time.sleep(0.5)  # 컨트롤바가 나타날 때까지 대기
-
-            # 호버 상태를 유지하면서 버튼 찾기
-            transcript_selectors = [
-                "button[data-purpose='transcript-toggle']",
-                "button[aria-label*='트랜스크립트']",
-                "button[aria-label*='Transcript']",
-                "button[aria-label*='transcript']",
-                "button[aria-label*='대본']",
-                "button[aria-label*='자막']",
-                "button[aria-label*='Subtitles']",
-                ".transcript-toggle"
-            ]
-
-            # 여러 번 시도 (컨트롤바가 안정화될 때까지)
-            for attempt in range(3):
-                # 호버 상태 재설정
-                actions.move_to_element(video_area).perform()
-                time.sleep(0.3)
-
-                for selector in transcript_selectors:
-                    try:
-                        element = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        if element and element.is_displayed():
-                            # 버튼을 찾았지만 호버 상태 유지
-                            actions.move_to_element(element).perform()
-                            return element
-                    except:
-                        continue
-
-            return None
+            # ElementFinder를 사용하여 최적화된 버튼 찾기 사용
+            from .element_finder import ElementFinder
+            element_finder = ElementFinder(self.driver, self.wait, self.log_callback)
+            return element_finder.find_transcript_button()
 
         except Exception:
             return None
+
+    def _wait_for_panel_close(self, transcript_button, max_wait_seconds=3) -> bool:
+        """트랜스크립트 패널이 닫힐 때까지 스마트 대기"""
+        try:
+            start_time = time.time()
+            while time.time() - start_time < max_wait_seconds:
+                try:
+                    is_expanded = transcript_button.get_attribute('aria-expanded') == 'true'
+                    if not is_expanded:
+                        return True  # 패널이 닫혔음
+                    time.sleep(0.2)  # 짧은 간격으로 체크
+                except:
+                    time.sleep(0.2)
+            return False
+        except:
+            return False
 
     def _find_video_area(self):
         """비디오 영역 찾기"""

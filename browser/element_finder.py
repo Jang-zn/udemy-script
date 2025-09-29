@@ -18,14 +18,9 @@ class ElementFinder:
         self.wait = wait
         self.log_callback = log_callback or print
 
-    def find_transcript_button(self) -> Optional:
-        """트랜스크립트 버튼 찾기 (호버 상태 유지)"""
+    def find_transcript_button(self, max_attempts=10) -> Optional:
+        """트랜스크립트 버튼 찾기 (호버 + 검색 반복)"""
         try:
-            delays = ClickStrategies.get_click_delays()
-
-            # 페이지 로딩 대기
-            time.sleep(delays["page_load"])
-
             # 비디오 영역 찾기
             video_area = self.find_video_area()
             if not video_area:
@@ -33,30 +28,28 @@ class ElementFinder:
 
             actions = ActionChains(self.driver)
 
-            # 비디오 영역에 마우스 이동하고 호버 상태 유지
-            actions.move_to_element(video_area).perform()
-            time.sleep(delays["hover_delay"])
-
-            # 여러 번 시도 (컨트롤바가 안정화될 때까지)
-            for attempt in range(3):
-                # 호버 상태 재설정
+            # 1초마다 호버 + 버튼 검색 반복
+            for attempt in range(max_attempts):
+                # 비디오 영역에 호버하여 컨트롤바 활성화
                 actions.move_to_element(video_area).perform()
-                time.sleep(delays["hover_delay"])
 
+                # 트랜스크립트 버튼 검색
                 for selector in UdemySelectors.TRANSCRIPT_BUTTONS:
                     try:
                         element = self.driver.find_element(By.CSS_SELECTOR, selector)
                         if element and element.is_displayed():
-                            # 버튼을 찾았지만 호버 상태 유지
-                            actions.move_to_element(element).perform()
                             return element
                     except:
                         continue
+
+                # 1초 대기 후 재시도
+                time.sleep(1)
 
             return None
 
         except Exception:
             return None
+
 
     def find_video_area(self) -> Optional:
         """비디오 영역 찾기"""
@@ -95,33 +88,71 @@ class ClickHandler:
         self.log_callback = log_callback or print
 
     def click_element_with_strategies(self, element, scroll_to_view=True) -> bool:
-        """여러 전략으로 요소 클릭 시도"""
+        """여러 전략으로 요소 클릭 시도 (최적화된 대기)"""
         try:
-            delays = ClickStrategies.get_click_delays()
-
             if scroll_to_view:
                 self._scroll_to_element(element)
-                time.sleep(delays["after_scroll"])
+                # 스크롤 후 요소 안정화 대기 (고정 시간 대신 조건부)
+                if not self._wait_for_element_stable_after_scroll(element):
+                    time.sleep(0.2)  # 폴백으로 최소 대기
 
             # 전략 1: ActionChains로 클릭
             if self._try_action_chains_click(element):
-                time.sleep(delays["after_click"])
+                self._wait_for_click_effect()
                 return True
 
             # 전략 2: 일반 클릭
             if self._try_normal_click(element):
-                time.sleep(delays["after_click"])
+                self._wait_for_click_effect()
                 return True
 
             # 전략 3: JavaScript 클릭
             if self._try_javascript_click(element):
-                time.sleep(delays["after_click"])
+                self._wait_for_click_effect()
                 return True
 
             return False
 
         except Exception:
             return False
+
+    def _wait_for_element_stable_after_scroll(self, element, max_wait=1.0) -> bool:
+        """스크롤 후 요소가 안정되었는지 확인"""
+        try:
+            start_time = time.time()
+            last_location = element.location
+
+            while time.time() - start_time < max_wait:
+                time.sleep(0.05)  # 매우 짧은 간격
+                try:
+                    current_location = element.location
+                    if current_location == last_location:
+                        return True  # 위치가 안정됨
+                    last_location = current_location
+                except:
+                    break
+
+            return False
+        except:
+            return False
+
+    def _wait_for_click_effect(self, max_wait=0.3) -> bool:
+        """클릭 효과 대기 (DOM 변화나 페이지 전환 감지)"""
+        try:
+            # 간단한 DOM 변화 감지 또는 최소 대기
+            start_time = time.time()
+            current_url = self.driver.current_url
+
+            while time.time() - start_time < max_wait:
+                # URL 변화 감지 (페이지 전환)
+                if self.driver.current_url != current_url:
+                    return True
+
+                time.sleep(0.1)
+
+            return True  # 시간 초과 시에도 성공으로 처리
+        except:
+            return True
 
     def click_lecture_item(self, video_element) -> bool:
         """강의 아이템 클릭 (강화된 로직)"""
@@ -454,11 +485,11 @@ class SectionNavigator:
                     if is_expanded and not has_content and attempt == 5:
                         self._debug_section_expansion(section_element, section_idx)
 
-                    time.sleep(0.5)  # 조금 더 긴 간격
+                    time.sleep(0.3)  # 더 짧은 간격으로 변경
 
                 except Exception as inner_e:
                     self.log_callback(f"    🔄 시도 {attempt} 섹션 상태 확인 중... ({str(inner_e)[:30]})")
-                    time.sleep(0.5)
+                    time.sleep(0.3)  # 더 짧은 간격으로 변경
 
             self.log_callback(f"    ❌ 섹션 {section_idx + 1} 확장 대기 시간 초과 (총 {attempt}번 시도)")
 

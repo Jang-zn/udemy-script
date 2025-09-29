@@ -166,11 +166,9 @@ class SmartWaiter:
             self.log_callback(f"    ❌ 트랜스크립트 패널 열림 대기 실패: {str(e)}")
             return False
 
-    def wait_for_video_page_ready(self, max_wait_seconds=15) -> bool:
-        """비디오 페이지가 완전히 로드될 때까지 대기"""
+    def wait_for_lecture_content_ready(self, max_wait_seconds=None, lecture_type_hint=None) -> bool:
+        """강의 콘텐츠가 완전히 로드될 때까지 대기 (타입별 적응형)"""
         try:
-            self.log_callback("    ⏳ 비디오 페이지 로딩 대기 중...")
-
             # 1. URL이 lecture를 포함할 때까지 대기
             start_time = time.time()
             while time.time() - start_time < 5:
@@ -181,7 +179,30 @@ class SmartWaiter:
                 self.log_callback("    ⚠️ 강의 URL로 변경되지 않음")
                 return False
 
-            # 2. 비디오 플레이어나 강의 콘텐츠가 로드될 때까지 대기
+            # 2. 강의 타입 결정 (커리큘럼에서 미리 감지된 타입 우선 사용)
+            if lecture_type_hint and lecture_type_hint != "unknown":
+                lecture_type = lecture_type_hint
+                self.log_callback(f"    📋 커리큘럼에서 감지된 타입 사용: {lecture_type}")
+            else:
+                lecture_type = self._detect_lecture_type()
+                self.log_callback(f"    🔍 페이지에서 타입 감지: {lecture_type}")
+
+            # 3. 적응형 대기 시간 설정
+            if max_wait_seconds is None:
+                if lecture_type == "video":
+                    max_wait_seconds = 15
+                elif lecture_type == "document":
+                    max_wait_seconds = 5  # 3초에서 5초로 증가
+                elif lecture_type == "quiz":
+                    max_wait_seconds = 3  # 2초에서 3초로 증가
+                elif lecture_type == "resource":
+                    max_wait_seconds = 2  # 리소스 파일은 빠르게
+                else:
+                    max_wait_seconds = 8  # 5초에서 8초로 증가 (unknown 타입)
+
+            self.log_callback(f"    ⏳ {lecture_type} 강의 로딩 대기 중... (최대 {max_wait_seconds}초)")
+
+            # 4. 강의 타입별 콘텐츠 로딩 대기
             remaining_time = max_wait_seconds - (time.time() - start_time)
             if remaining_time <= 0:
                 return False
@@ -190,30 +211,51 @@ class SmartWaiter:
             content_start_time = time.time()
 
             while time.time() - content_start_time < remaining_time:
-                # 비디오 플레이어 확인
-                if self._is_video_player_ready():
-                    content_loaded = True
-                    break
+                if lecture_type == "video":
+                    if self._is_video_player_ready():
+                        content_loaded = True
+                        break
+                elif lecture_type == "document":
+                    if self._is_document_content_ready():
+                        content_loaded = True
+                        break
+                elif lecture_type == "quiz":
+                    if self._is_quiz_content_ready():
+                        content_loaded = True
+                        break
+                elif lecture_type == "resource":
+                    # 리소스 파일은 다운로드 링크나 문서가 로드되면 OK
+                    if (self._is_document_content_ready() or
+                        self._is_resource_content_ready()):
+                        content_loaded = True
+                        break
+                else:
+                    # 혼합 타입 - 어떤 콘텐츠든 로드되면 OK
+                    if (self._is_video_player_ready() or
+                        self._is_document_content_ready() or
+                        self._is_quiz_content_ready()):
+                        content_loaded = True
+                        break
 
-                # 문서 강의 확인
-                if self._is_document_content_ready():
-                    content_loaded = True
-                    break
-
-                time.sleep(0.5)
+                time.sleep(0.3)  # 더 짧은 간격으로 체크
 
             if content_loaded:
-                # 3. 추가 안정화 대기 (DOM이 완전히 안정될 때까지)
-                time.sleep(1)
-                self.log_callback("    ✅ 비디오 페이지가 완전히 로드되었습니다")
+                # 4. 최소한의 안정화 대기 (타입별 조정)
+                stabilization_time = 0.5 if lecture_type in ["document", "quiz"] else 1.0
+                time.sleep(stabilization_time)
+                self.log_callback(f"    ✅ {lecture_type} 강의가 완전히 로드되었습니다")
                 return True
             else:
-                self.log_callback("    ⚠️ 비디오 페이지 콘텐츠 로딩 실패")
+                self.log_callback(f"    ⚠️ {lecture_type} 강의 콘텐츠 로딩 실패")
                 return False
 
         except Exception as e:
-            self.log_callback(f"    ❌ 비디오 페이지 대기 실패: {str(e)}")
+            self.log_callback(f"    ❌ 강의 콘텐츠 대기 실패: {str(e)}")
             return False
+
+    def wait_for_video_page_ready(self, max_wait_seconds=15) -> bool:
+        """비디오 페이지가 완전히 로드될 때까지 대기 (호환성용 - 새 메서드 사용 권장)"""
+        return self.wait_for_lecture_content_ready(max_wait_seconds)
 
     def wait_for_element_stable(self, element, stable_duration=1.0, max_wait=10) -> bool:
         """요소가 안정적인 상태가 될 때까지 대기"""
@@ -312,7 +354,10 @@ class SmartWaiter:
             document_selectors = [
                 ".lecture-view",
                 ".lecture-content",
-                "[data-purpose='lecture-content']"
+                "[data-purpose='lecture-content']",
+                ".article-content",
+                ".text-content",
+                ".ud-component--course-taking--lecture-view"
             ]
 
             for selector in document_selectors:
@@ -325,6 +370,130 @@ class SmartWaiter:
             return False
         except:
             return False
+
+    def _is_quiz_content_ready(self) -> bool:
+        """퀴즈/실습 콘텐츠가 준비되었는지 확인"""
+        try:
+            quiz_selectors = [
+                ".quiz-container",
+                ".practice-test",
+                ".assignment-container",
+                "[data-purpose='quiz']",
+                "[data-purpose='practice-test']",
+                ".ud-component--course-taking--quiz",
+                ".course-taking-quiz"
+            ]
+
+            for selector in quiz_selectors:
+                try:
+                    content = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if content.is_displayed():
+                        return True
+                except:
+                    continue
+            return False
+        except:
+            return False
+
+    def _is_resource_content_ready(self) -> bool:
+        """리소스/파일 다운로드 콘텐츠가 준비되었는지 확인"""
+        try:
+            resource_selectors = [
+                ".resource-list",
+                ".download-link",
+                ".external-link",
+                "[data-purpose='resource']",
+                ".ud-component--course-taking--resource",
+                "a[href*='download']",
+                "a[target='_blank']"
+            ]
+
+            for selector in resource_selectors:
+                try:
+                    content = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if content.is_displayed():
+                        return True
+                except:
+                    continue
+            return False
+        except:
+            return False
+
+    def _detect_lecture_type(self) -> str:
+        """강의 타입 감지 (video/document/quiz/unknown)"""
+        try:
+            # 1. URL 패턴으로 먼저 추측
+            url = self.driver.current_url.lower()
+            if 'quiz' in url or 'practice' in url or 'assignment' in url:
+                return "quiz"
+
+            # 2. 짧은 대기 후 DOM 구조 재확인 (페이지가 완전히 로딩될 시간 제공)
+            time.sleep(0.5)
+
+            # 비디오 요소 확인 (더 넓은 범위)
+            video_selectors = UdemySelectors.VIDEO_AREAS + [
+                ".ud-video-player", ".video-js", ".vjs-poster",
+                "video[src]", "[data-purpose*='video']",
+                ".lecture-video", ".player-wrapper"
+            ]
+            for video_selector in video_selectors:
+                try:
+                    video = self.driver.find_element(By.CSS_SELECTOR, video_selector)
+                    if video.is_displayed():
+                        return "video"
+                except:
+                    continue
+
+            # 퀴즈 요소 확인
+            quiz_selectors = [
+                ".quiz-container", ".practice-test", ".assignment-container",
+                "[data-purpose='quiz']", "[data-purpose='practice-test']"
+            ]
+            for quiz_selector in quiz_selectors:
+                try:
+                    quiz = self.driver.find_element(By.CSS_SELECTOR, quiz_selector)
+                    if quiz.is_displayed():
+                        return "quiz"
+                except:
+                    continue
+
+            # 문서 요소 확인
+            document_selectors = [
+                ".lecture-view", ".lecture-content", "[data-purpose='lecture-content']",
+                ".article-content", ".text-content", ".ud-component--course-taking--lecture-view"
+            ]
+            for doc_selector in document_selectors:
+                try:
+                    doc = self.driver.find_element(By.CSS_SELECTOR, doc_selector)
+                    if doc.is_displayed():
+                        return "document"
+                except:
+                    continue
+
+            # 3. 페이지 제목이나 메타데이터로 추가 확인
+            try:
+                page_title = self.driver.title.lower()
+                if any(keyword in page_title for keyword in ['quiz', 'test', 'assignment']):
+                    return "quiz"
+                elif any(keyword in page_title for keyword in ['article', 'reading', 'text']):
+                    return "document"
+            except:
+                pass
+
+            # 4. 트랜스크립트 버튼 존재 여부로 비디오 강의 추측
+            try:
+                for selector in UdemySelectors.TRANSCRIPT_BUTTONS[:3]:
+                    button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if button:
+                        return "video"  # 트랜스크립트 버튼이 있으면 보통 비디오 강의
+            except:
+                pass
+
+            return "unknown"
+
+        except Exception as e:
+            self.log_callback(f"    ⚠️ 강의 타입 감지 실패: {str(e)}")
+            return "unknown"
 
     def _get_element_state(self, element) -> dict:
         """요소의 현재 상태를 가져오기"""

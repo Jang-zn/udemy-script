@@ -63,8 +63,8 @@ class TranscriptScraper(BrowserBase):
                 else:
                     self.log_callback(f"⚠️ 섹션 {section_idx + 1} 처리 실패 - 다음 섹션으로 진행")
 
-                # 섹션 간 대기
-                time.sleep(2)
+                # 섹션 간 최소 대기 (성능 최적화)
+                time.sleep(0.5)
 
             self.log_callback(f"\\n🏁 스크래핑 완료: {success_count}/{total_sections}개 섹션 성공")
             return success_count > 0
@@ -204,7 +204,20 @@ class TranscriptScraper(BrowserBase):
         try:
             # 강의 제목 추출
             lecture_title = self._extract_lecture_title(lecture_element)
-            self.log_callback(f"  📚 강의 {lecture_idx + 1}: {lecture_title}")
+
+            # 강의 타입 감지 (커리큘럼 아이콘 기반)
+            lecture_type = self._get_lecture_type_from_element(lecture_element)
+            self.log_callback(f"  📚 강의 {lecture_idx + 1}: {lecture_title} (타입: {lecture_type})")
+
+            # 문서/아티클 강의는 스킵 (트랜스크립트가 없음)
+            if lecture_type == "document":
+                self.log_callback(f"    ⏭️ 문서 강의는 스킵합니다 - 트랜스크립트 없음")
+                return "skip"
+
+            # 퀴즈나 리소스 강의도 스킵 (트랜스크립트가 없음)
+            if lecture_type in ["quiz", "resource"]:
+                self.log_callback(f"    ⏭️ {lecture_type} 강의는 스킵합니다 - 트랜스크립트 없음")
+                return "skip"
 
             # 강의 클릭 (디버깅 추가)
             self.log_callback(f"    🖱️ 강의 {lecture_idx + 1} 클릭 시도 중...")
@@ -215,12 +228,12 @@ class TranscriptScraper(BrowserBase):
                 return "skip"
             self.log_callback(f"    ✅ 강의 {lecture_idx + 1} 클릭 성공")
 
-            # 페이지 로딩 대기
-            if not self.video_navigator.wait_for_video_page_load():
+            # 페이지 로딩 대기 (타입별 최적화된 대기)
+            if not self.video_navigator.wait_for_video_page_load(lecture_type_hint=lecture_type):
                 self.log_callback(f"    ⚠️ 강의 페이지 로딩 실패 - 건너뜀")
                 return "skip"
 
-            # 트랜스크립트 추출
+            # 트랜스크립트 추출 (타입 힌트 전달)
             transcript_content = self.transcript_extractor.extract_transcript_from_video()
             if not transcript_content:
                 self.log_callback(f"    ⚠️ 트랜스크립트 추출 실패 - 건너뜀")
@@ -373,8 +386,13 @@ class TranscriptScraper(BrowserBase):
             course_dir = output_dir / safe_course_name
             ensure_directory(course_dir)
 
-            # 섹션 디렉토리 생성
-            section_dir = course_dir / f"Section_{section_idx + 1:02d}"
+            # 섹션 디렉토리 생성 (섹션 제목 포함)
+            if section_idx < len(self.current_course.sections):
+                section_title = self.current_course.sections[section_idx].title
+                safe_section_title = sanitize_filename(section_title)
+                section_dir = course_dir / f"Section_{section_idx + 1:02d}_{safe_section_title}"
+            else:
+                section_dir = course_dir / f"Section_{section_idx + 1:02d}"
             ensure_directory(section_dir)
 
             # 파일명 생성
@@ -417,6 +435,53 @@ class TranscriptScraper(BrowserBase):
         except Exception as e:
             self.log_callback(f"    ❌ 섹션 목록 복귀 실패: {str(e)}")
             return False
+
+    def _get_lecture_type_from_element(self, lecture_element) -> str:
+        """강의 요소에서 강의 타입 감지 (커리큘럼 아이콘 기반)"""
+        try:
+            # 더 안전한 방식으로 SVG use 요소들을 찾고 xlink:href 속성 확인
+            all_use_elements = lecture_element.find_elements(By.CSS_SELECTOR, "svg use")
+
+            for use_element in all_use_elements:
+                try:
+                    href = use_element.get_attribute("xlink:href")
+                    if not href:
+                        href = use_element.get_attribute("href")  # 새로운 표준
+
+                    if href:
+                        if "#icon-video" in href:
+                            self.log_callback(f"      🎬 비디오 아이콘 발견: {href}")
+                            return "video"
+                        elif "#icon-article" in href:
+                            self.log_callback(f"      📄 문서 아이콘 발견: {href}")
+                            return "document"
+                        elif "#icon-quiz" in href or "#icon-assignment" in href:
+                            self.log_callback(f"      📝 퀴즈 아이콘 발견: {href}")
+                            return "quiz"
+                        elif "#icon-file" in href or "#icon-download" in href:
+                            self.log_callback(f"      📁 리소스 아이콘 발견: {href}")
+                            return "resource"
+                except Exception:
+                    continue
+
+            # 디버깅: 발견된 아이콘들 로그
+            try:
+                if all_use_elements:
+                    icon_hrefs = []
+                    for use_elem in all_use_elements[:3]:  # 처음 3개만
+                        href = use_elem.get_attribute("xlink:href") or use_elem.get_attribute("href")
+                        if href:
+                            icon_hrefs.append(href)
+                    if icon_hrefs:
+                        self.log_callback(f"      ❓ 알 수 없는 아이콘: {icon_hrefs}")
+            except Exception:
+                pass
+
+            return "unknown"
+
+        except Exception as e:
+            self.log_callback(f"      ❌ 아이콘 감지 실패: {str(e)}")
+            return "unknown"
 
     # 기존 메서드들과의 호환성을 위한 메서드들
     def _find_transcript_button(self):

@@ -72,7 +72,11 @@ class UdemyScraperApp:
             self.status_callback("파일 저장 중...")
             if not self._save_course_files(course, course_name):
                 return False
-            
+
+            # 6. 섹션별 통합 대본 생성
+            self.status_callback("섹션별 통합 대본 생성 중...")
+            self._create_section_merged_files(course_name)
+
             self.log_callback("🎉 모든 작업이 완료되었습니다!")
             return True
             
@@ -221,6 +225,24 @@ class UdemyScraperApp:
             self.log_callback(f"❌ 파일 저장 중 오류: {str(e)}")
             return False
     
+    def _create_section_merged_files(self, course_name: str):
+        """섹션별 통합 대본 파일 생성"""
+        try:
+            from section_merger import SectionMerger
+            output_dir = Config.get_course_output_dir(course_name)
+
+            self.log_callback("📚 섹션별 통합 대본 생성 중...")
+            merger = SectionMerger(output_dir)
+            success = merger.merge_all_sections()
+
+            if success:
+                self.log_callback("✅ 섹션별 통합 대본 생성 완료")
+            else:
+                self.log_callback("⚠️ 섹션별 통합 대본 생성 중 일부 실패")
+
+        except Exception as e:
+            self.log_callback(f"❌ 섹션별 통합 대본 생성 실패: {str(e)}")
+
     def cleanup(self):
         """리소스 정리"""
         try:

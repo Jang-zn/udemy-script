@@ -135,7 +135,6 @@ class TranscriptExtractor:
         """트랜스크립트 내용 추출"""
         try:
             self.log_callback("    📖 트랜스크립트 내용 추출 중...")
-            time.sleep(2)
 
             # 1. 트랜스크립트 패널 찾기
             transcript_panel = self.element_finder.find_transcript_panel()
@@ -145,7 +144,12 @@ class TranscriptExtractor:
 
             self.log_callback(f"    ✅ 트랜스크립트 패널 발견: {transcript_panel.tag_name}")
 
-            # 2. cue 요소들 찾기
+            # 2. 트랜스크립트 콘텐츠가 로딩될 때까지 스마트 대기
+            if not self._wait_for_transcript_content_loaded(transcript_panel):
+                self.log_callback("    ❌ 트랜스크립트 콘텐츠 로딩 실패")
+                return None
+
+            # 3. cue 요소들 찾기
             cue_elements = self._find_transcript_cues(transcript_panel)
             if not cue_elements:
                 self.log_callback("    ❌ 트랜스크립트 cue 요소가 없습니다.")
@@ -154,7 +158,7 @@ class TranscriptExtractor:
 
             self.log_callback(f"    📊 트랜스크립트 cue 요소 {len(cue_elements)}개 발견")
 
-            # 3. 텍스트 추출
+            # 4. 텍스트 추출
             transcript_lines = self._extract_text_from_cues(cue_elements)
 
             if transcript_lines:
@@ -256,6 +260,37 @@ class TranscriptExtractor:
         except Exception as e:
             self.log_callback(f"    ❌ 디버깅 중 오류: {str(e)}")
 
+    def _wait_for_transcript_content_loaded(self, transcript_panel, max_wait_seconds=5) -> bool:
+        """트랜스크립트 콘텐츠가 로딩될 때까지 스마트 대기"""
+        try:
+            self.log_callback("    ⏳ 트랜스크립트 콘텐츠 로딩 대기 중...")
+
+            start_time = time.time()
+            while time.time() - start_time < max_wait_seconds:
+                # cue 요소들이 로딩되었는지 확인
+                cue_elements = self._find_transcript_cues(transcript_panel)
+                if cue_elements and len(cue_elements) > 0:
+                    # 첫 번째 cue에 실제 텍스트가 있는지 확인
+                    first_cue_text = self._find_cue_text_element(cue_elements[0])
+                    if first_cue_text and first_cue_text.text.strip():
+                        self.log_callback("    ✅ 트랜스크립트 콘텐츠 로딩 완료")
+                        return True
+
+                time.sleep(0.2)  # 짧은 간격으로 재확인
+
+            # 시간 초과 시 cue 요소라도 있는지 확인
+            cue_elements = self._find_transcript_cues(transcript_panel)
+            if cue_elements:
+                self.log_callback("    ⚠️ 콘텐츠 로딩 시간 초과이지만 cue 요소는 발견됨 - 진행")
+                return True
+
+            self.log_callback("    ❌ 트랜스크립트 콘텐츠 로딩 시간 초과")
+            return False
+
+        except Exception as e:
+            self.log_callback(f"    ❌ 트랜스크립트 콘텐츠 대기 실패: {str(e)}")
+            return False
+
 
 class VideoNavigator:
     """비디오 탐색 및 로딩 관리 클래스"""
@@ -266,6 +301,6 @@ class VideoNavigator:
         self.log_callback = log_callback or print
         self.smart_waiter = SmartWaiter(driver, wait, log_callback)
 
-    def wait_for_video_page_load(self) -> bool:
-        """비디오 페이지 로딩 대기 (스마트 대기)"""
-        return self.smart_waiter.wait_for_video_page_ready()
+    def wait_for_video_page_load(self, lecture_type_hint=None) -> bool:
+        """강의 페이지 로딩 대기 (타입별 적응형 스마트 대기)"""
+        return self.smart_waiter.wait_for_lecture_content_ready(lecture_type_hint=lecture_type_hint)
