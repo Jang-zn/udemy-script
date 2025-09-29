@@ -596,10 +596,27 @@ class CourseFinder(BrowserBase):
                 self.log_callback(f"❌ '{course_name}' 검색 결과가 없습니다")
                 return False
 
-            # 첫 번째 강의 카드 클릭 (검색 결과 중 첫 번째)
-            first_card = course_cards[0]
-            self.log_callback(f"🎯 첫 번째 강의 선택")
-            first_card.click()
+            # 강의 카드만 필터링 (enrolled-course-card 클래스를 가진 카드만)
+            actual_course_cards = []
+            for card in course_cards:
+                try:
+                    # 실제 강의 카드인지 확인 (href="/course-dashboard-redirect" 포함)
+                    course_link = card.find_element(By.CSS_SELECTOR, "a[href*='/course-dashboard-redirect']")
+                    if course_link:
+                        actual_course_cards.append(course_link)
+                        break  # 첫 번째 강의 카드만 필요
+                except:
+                    continue
+
+            if not actual_course_cards:
+                self.log_callback(f"❌ 강의 카드를 찾을 수 없습니다")
+                return False
+
+            # 첫 번째 실제 강의 클릭
+            first_course = actual_course_cards[0]
+            course_title = first_course.text
+            self.log_callback(f"🎯 강의 선택: {course_title}")
+            first_course.click()
             time.sleep(3)
 
             # 2. 강의 페이지에서 스크래핑 진행
@@ -609,20 +626,21 @@ class CourseFinder(BrowserBase):
             from core.models import Course
 
             # 강의 정보 수집
-            course = Course(name=course_name)
+            course = Course(title=course_name)
             navigator = UdemyNavigator(self.driver, self.wait, self.log_callback)
-            scraper = SubtitleScraper(self.driver, self.wait, self.log_callback)
 
-            # 커리큘럼 분석
-            if not navigator.analyze_curriculum(course):
-                self.log_callback("❌ 강의 구조를 파싱할 수 없습니다")
-                return False
+            # 🔧 수정: 상태 체크를 먼저 하고 섹션 영역 확인 후 스크래핑 진행
+            self.log_callback("🔍 강의 페이지 상태 체크 및 섹션 영역 확인...")
 
-            total_lectures = sum(len(section.lectures) for section in course.sections)
-            self.log_callback(f"✅ {len(course.sections)}개 섹션, {total_lectures}개 강의 발견")
+            # 1. 먼저 트랜스크립트 패널 상태 체크하고 normal body 상태로 맞춤
+            state_changed = navigator._ensure_normal_body_state_and_check_sections()
 
-            # 전체 스크래핑 워크플로우 실행
-            success = navigator.start_complete_scraping_workflow(course)
+            # 2. 섹션 영역이 제대로 보이는지 확인하고 커리큘럼 분석
+            success = navigator.analyze_curriculum(course)
+
+            # 3. 분석 완료 후 스크래핑 워크플로우 시작
+            if success:
+                success = navigator.start_complete_scraping_workflow(course)
 
             if success:
                 self.log_callback(f"💾 '{course_name}' 스크래핑 완료")

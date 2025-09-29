@@ -1,5 +1,5 @@
 """
-Udemy 강의 자막/스크립트 추출 모듈
+Udemy 강의 자막/스크립트 추출 모듈 (리팩토링된 버전)
 """
 
 import time
@@ -10,39 +10,114 @@ from config import Config
 from core.models import Course, Section, Lecture
 from utils.file_utils import ensure_directory, sanitize_filename
 from .base import BrowserBase
+from .element_finder import ElementFinder, ClickHandler, SectionNavigator
+from .transcript_extractor import TranscriptExtractor, VideoNavigator
+from .selectors import UdemySelectors
 
 
 class TranscriptScraper(BrowserBase):
+    """강의 자막 추출 메인 클래스 (리팩토링된 버전)"""
+
     def __init__(self, driver, wait, log_callback=None):
         super().__init__(driver, wait, log_callback)
+        self.current_course = None
+
+        # 헬퍼 클래스들 초기화
+        self.element_finder = ElementFinder(driver, wait, log_callback)
+        self.click_handler = ClickHandler(driver, log_callback)
+        self.section_navigator = SectionNavigator(driver, wait, log_callback)
+        self.transcript_extractor = TranscriptExtractor(driver, wait, log_callback)
+        self.video_navigator = VideoNavigator(driver, wait, log_callback)
 
     def start_complete_scraping_workflow(self, course: Course) -> bool:
         """전체 스크래핑 워크플로우 시작"""
         try:
+            self.current_course = course
             self.log_callback("🚀 전체 스크래핑 워크플로우 시작...")
             self.log_callback(f"📚 대상 강의: {course.title}")
             self.log_callback(f"📊 총 {len(course.sections)}개 섹션, {course.total_lectures}개 강의")
 
+            # 처음 상태 확인 및 정리
+            if self._ensure_normal_body_state():
+                self.log_callback("✅ 초기 상태 확인 완료")
+
+            # 커리큘럼 재분석 (필요시)
+            if not course.sections or course.total_lectures == 0:
+                self.log_callback("🔄 커리큘럼 재분석 필요...")
+                if not self._reanalyze_curriculum(course):
+                    self.log_callback("❌ 커리큘럼 재분석 실패")
+                    return False
+
+            # 모든 섹션 처리
             success_count = 0
             total_sections = len(course.sections)
 
             for section_idx, section in enumerate(course.sections):
-                self.log_callback(f"\n📁 섹션 {section_idx + 1}/{total_sections}: {section.title}")
+                self.log_callback(f"\\n📁 섹션 {section_idx + 1}/{total_sections}: {section.title}")
 
                 if self._process_section(section, section_idx):
                     success_count += 1
                     self.log_callback(f"✅ 섹션 {section_idx + 1} 완료")
                 else:
-                    self.log_callback(f"❌ 섹션 {section_idx + 1} 실패")
+                    self.log_callback(f"⚠️ 섹션 {section_idx + 1} 처리 실패 - 다음 섹션으로 진행")
 
                 # 섹션 간 대기
                 time.sleep(2)
 
-            self.log_callback(f"\n🏁 스크래핑 완료: {success_count}/{total_sections}개 섹션 성공")
+            self.log_callback(f"\\n🏁 스크래핑 완료: {success_count}/{total_sections}개 섹션 성공")
             return success_count > 0
 
         except Exception as e:
             self.log_callback(f"❌ 스크래핑 워크플로우 실패: {str(e)}")
+            return False
+
+    def _ensure_normal_body_state(self) -> bool:
+        """normal body 상태 확인 및 설정"""
+        try:
+            self.log_callback("🔍 페이지 상태 확인 중...")
+
+            # 트랜스크립트 버튼 찾기
+            transcript_button = self.element_finder.find_transcript_button()
+            if not transcript_button:
+                self.log_callback("⚠️ 트랜스크립트 버튼을 찾을 수 없음 - 정상 상태로 가정")
+                return True
+
+            # 현재 패널 상태 확인
+            is_expanded = transcript_button.get_attribute('aria-expanded') == 'true'
+            self.log_callback(f"📊 트랜스크립트 패널 상태: {'열림(script body)' if is_expanded else '닫힘(normal body)'}")
+
+            # 패널이 열려있다면 닫기
+            if is_expanded:
+                self.log_callback("🔄 섹션 영역 표시를 위해 트랜스크립트 패널을 닫는 중...")
+                if self.transcript_extractor.close_transcript_panel():
+                    self.log_callback("✅ 트랜스크립트 패널 닫기 완료 → 섹션 영역 표시")
+                    return True
+                else:
+                    self.log_callback("❌ 트랜스크립트 패널 닫기 실패")
+                    return False
+            else:
+                self.log_callback("✅ 이미 normal body 상태 - 섹션 영역이 표시되어 있음")
+                return True
+
+        except Exception as e:
+            self.log_callback(f"❌ 상태 확인 중 오류: {str(e)}")
+            return False
+
+    def _reanalyze_curriculum(self, course: Course) -> bool:
+        """커리큘럼 재분석"""
+        try:
+            from .curriculum_analyzer import CurriculumAnalyzer
+            analyzer = CurriculumAnalyzer(self.driver, self.wait, self.log_callback)
+            success = analyzer.analyze_curriculum(course)
+
+            if success:
+                self.log_callback(f"✅ 재분석 완료: {len(course.sections)}개 섹션, {course.total_lectures}개 강의")
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            self.log_callback(f"❌ 커리큘럼 재분석 중 오류: {str(e)}")
             return False
 
     def _process_section(self, section: Section, section_idx: int) -> bool:
@@ -51,7 +126,7 @@ class TranscriptScraper(BrowserBase):
             self.log_callback(f"🔧 섹션 {section_idx + 1} 처리 중: {section.title}")
 
             # 1. 섹션 아코디언 열기
-            if not self._open_section_accordion(section_idx):
+            if not self.section_navigator.open_section_accordion(section_idx):
                 self.log_callback(f"❌ 섹션 {section_idx + 1} 아코디언 열기 실패")
                 return False
 
@@ -62,353 +137,163 @@ class TranscriptScraper(BrowserBase):
             self.log_callback(f"❌ 섹션 {section_idx + 1} 처리 실패: {str(e)}")
             return False
 
-    def _open_section_accordion(self, section_idx: int) -> bool:
-        """섹션 아코디언 열기"""
-        try:
-            self.log_callback(f"📂 섹션 {section_idx + 1} 아코디언 열기...")
-
-            # 섹션 패널 찾기 (실제 HTML 구조 기반)
-            section_selectors = [
-                f"div[data-purpose='section-panel-{section_idx}']",
-                f"div[data-purpose='section-panel-{section_idx + 1}']",  # 1부터 시작하는 경우
-                f"div[data-purpose^='section-panel-']:nth-child({section_idx + 1})",
-                f".curriculum-section:nth-child({section_idx + 1})"
-            ]
-
-            section_element = None
-            for selector in section_selectors:
-                try:
-                    element = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if element.is_displayed():
-                        section_element = element
-                        self.log_callback(f"✅ 섹션 패널 발견: {selector}")
-                        break
-                except:
-                    continue
-
-            if not section_element:
-                self.log_callback(f"❌ 섹션 {section_idx + 1} 패널을 찾을 수 없음")
-                return False
-
-            # 아코디언 헤더(토글 버튼) 찾기
-            header_selectors = [
-                "button[data-purpose='section-header-button']",
-                ".section-header button",
-                ".curriculum-section-header",
-                "button",
-                ".section-title"
-            ]
-
-            accordion_button = None
-            for selector in header_selectors:
-                try:
-                    button = section_element.find_element(By.CSS_SELECTOR, selector)
-                    if button.is_displayed():
-                        accordion_button = button
-                        break
-                except:
-                    continue
-
-            if not accordion_button:
-                self.log_callback(f"⚠️ 섹션 {section_idx + 1} 토글 버튼을 찾을 수 없음")
-                return True  # 이미 열려있을 수도 있음
-
-            # 아코디언이 닫혀있는지 확인
-            is_collapsed = False
-            try:
-                # aria-expanded 속성 확인
-                expanded = accordion_button.get_attribute('aria-expanded')
-                if expanded and expanded.lower() == 'false':
-                    is_collapsed = True
-
-                # 또는 클래스명으로 확인
-                class_name = accordion_button.get_attribute('class') or ""
-                if 'collapsed' in class_name.lower():
-                    is_collapsed = True
-
-            except:
-                # 기본적으로 닫혀있다고 가정
-                is_collapsed = True
-
-            if is_collapsed:
-                self.log_callback(f"🔓 섹션 {section_idx + 1} 아코디언 열기 중...")
-                accordion_button.click()
-                time.sleep(2)  # 아코디언 열리는 시간 대기
-                self.log_callback(f"✅ 섹션 {section_idx + 1} 아코디언 열림")
-            else:
-                self.log_callback(f"✅ 섹션 {section_idx + 1} 이미 열려있음")
-
-            return True
-
-        except Exception as e:
-            self.log_callback(f"❌ 섹션 {section_idx + 1} 아코디언 열기 실패: {str(e)}")
-            return False
-
     def _process_section_videos(self, section: Section, section_idx: int) -> bool:
         """섹션 내 비디오들 처리"""
         try:
             self.log_callback(f"🎥 섹션 {section_idx + 1} 비디오 처리 시작...")
 
-            # 섹션의 콘텐츠 영역 찾기
-            content_area = self._find_section_content_area_by_index(section_idx)
-            if not content_area:
+            # 섹션 콘텐츠 영역 찾기
+            section_content = self._find_section_content_area(section_idx)
+            if not section_content:
                 self.log_callback(f"❌ 섹션 {section_idx + 1} 콘텐츠 영역을 찾을 수 없음")
                 return False
 
-            # 비디오 요소들 찾기
-            video_elements = content_area.find_elements(By.CSS_SELECTOR,
-                "li[data-purpose='curriculum-item-video'], .curriculum-item-video, li")
+            # 강의 요소들 찾기
+            lecture_elements = self._find_lecture_elements(section_content)
+            if not lecture_elements:
+                self.log_callback(f"❌ 섹션 {section_idx + 1}에서 강의를 찾을 수 없음")
+                return False
 
-            if not video_elements:
-                self.log_callback(f"⚠️ 섹션 {section_idx + 1}에서 비디오 요소를 찾을 수 없음")
-                return True  # 비디오가 없는 섹션일 수 있음
+            self.log_callback(f"🔍 섹션 {section_idx + 1}에서 {len(lecture_elements)}개 강의 발견")
 
-            self.log_callback(f"🔍 섹션 {section_idx + 1}에서 {len(video_elements)}개 요소 발견")
-
+            # 각 강의 처리
             success_count = 0
-            for video_idx, video_element in enumerate(video_elements):
-                if self._process_single_video(video_element, video_idx, section_idx):
+            skip_count = 0
+
+            for lecture_idx, lecture_element in enumerate(lecture_elements):
+                result = self._process_single_lecture(lecture_element, lecture_idx, section_idx)
+
+                if result == "success":
                     success_count += 1
+                elif result == "skip":
+                    skip_count += 1
 
-                # 비디오 간 대기
-                time.sleep(1)
+            # 결과 로그
+            total_lectures = len(lecture_elements)
+            self.log_callback(f"📊 섹션 {section_idx + 1} 결과: {success_count}개 자막 추출, {skip_count}개 건너뜀, 총 {total_lectures}개 강의")
 
-            self.log_callback(f"📊 섹션 {section_idx + 1} 결과: {success_count}/{len(video_elements)}개 비디오 성공")
             return success_count > 0
 
         except Exception as e:
             self.log_callback(f"❌ 섹션 {section_idx + 1} 비디오 처리 실패: {str(e)}")
             return False
 
-    def _find_section_content_area_by_index(self, section_idx: int):
-        """섹션 인덱스로 콘텐츠 영역 찾기"""
+    def _process_single_lecture(self, lecture_element, lecture_idx: int, section_idx: int) -> str:
+        """개별 강의 처리"""
         try:
-            section_selectors = [
-                f"div[data-purpose='section-panel-{section_idx}']",
-                f"div[data-purpose='section-panel-{section_idx + 1}']",
-                f".curriculum-section:nth-child({section_idx + 1})"
-            ]
+            # 강의 제목 추출
+            lecture_title = self._extract_lecture_title(lecture_element)
+            self.log_callback(f"  📚 강의 {lecture_idx + 1}: {lecture_title}")
 
-            for selector in section_selectors:
-                try:
-                    section_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+            # 강의 클릭
+            if not self.click_handler.click_lecture_item(lecture_element):
+                self.log_callback(f"    ⚠️ 강의 클릭 실패 - 건너뜀")
+                return "skip"
 
-                    # 섹션 내 콘텐츠 영역 찾기
-                    content_selectors = [
-                        ".section-content ul",
-                        ".curriculum-section-content ul",
-                        "ul",
-                        ".section-list"
-                    ]
+            # 페이지 로딩 대기
+            if not self.video_navigator.wait_for_video_page_load():
+                self.log_callback(f"    ⚠️ 강의 페이지 로딩 실패 - 건너뜀")
+                return "skip"
 
-                    for content_selector in content_selectors:
-                        try:
-                            content = section_element.find_element(By.CSS_SELECTOR, content_selector)
-                            return content
-                        except:
-                            continue
-
-                    return section_element
-
-                except:
-                    continue
-
-            return None
-
-        except:
-            return None
-
-    def _process_single_video(self, video_element, video_idx: int, section_idx: int) -> bool:
-        """개별 비디오 처리"""
-        try:
-            # 비디오 제목 추출
-            video_title = self._extract_video_title(video_element)
-            self.log_callback(f"  🎬 비디오 {video_idx + 1}: {video_title}")
-
-            # 비디오 클릭
-            if not self._click_video(video_element):
-                self.log_callback(f"    ❌ 비디오 클릭 실패")
-                return False
-
-            # 비디오 페이지 로딩 대기
-            if not self._wait_for_video_page():
-                self.log_callback(f"    ❌ 비디오 페이지 로딩 실패")
-                return False
-
-            # 자막 패널 열기
-            if not self._open_transcript_panel():
-                self.log_callback(f"    ❌ 자막 패널 열기 실패")
-                return False
-
-            # 자막 내용 추출
-            transcript_content = self._extract_transcript_content()
+            # 트랜스크립트 추출
+            transcript_content = self.transcript_extractor.extract_transcript_from_video()
             if not transcript_content:
-                self.log_callback(f"    ⚠️ 자막 내용 없음")
-                return False
+                self.log_callback(f"    ⚠️ 트랜스크립트 추출 실패 - 건너뜀")
+                return "skip"
 
-            # 자막 파일 저장
-            self._save_transcript(transcript_content, video_title, section_idx, video_idx)
+            # 파일 저장
+            self._save_transcript(transcript_content, lecture_title, section_idx, lecture_idx)
 
-            # 자막 패널 닫기
-            self._close_transcript_panel()
+            # 섹션 목록으로 돌아가기
+            self._return_to_section_list()
 
-            self.log_callback(f"    ✅ 비디오 {video_idx + 1} 완료")
-            return True
+            self.log_callback(f"    ✅ 강의 {lecture_idx + 1} 자막 추출 완료")
+            return "success"
 
         except Exception as e:
-            self.log_callback(f"    ❌ 비디오 {video_idx + 1} 처리 실패: {str(e)}")
-            return False
+            self.log_callback(f"    ❌ 강의 {lecture_idx + 1} 처리 중 오류: {str(e)}")
+            return "error"
 
-    def _extract_video_title(self, video_element) -> str:
-        """비디오 제목 추출"""
+    def _find_section_content_area(self, section_idx: int):
+        """섹션 콘텐츠 영역 찾기"""
+        selectors = [
+            f"div[data-purpose='section-panel-{section_idx}']",
+            f"div[data-purpose='section-panel-{section_idx + 1}']",
+            f".curriculum-section:nth-child({section_idx + 1})"
+        ]
+
+        for selector in selectors:
+            try:
+                element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                if element:
+                    return element
+            except:
+                continue
+
+        return None
+
+    def _find_lecture_elements(self, section_content):
+        """강의 요소들 찾기"""
+        for selector in UdemySelectors.LECTURE_ITEMS:
+            try:
+                elements = section_content.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    return elements
+            except:
+                continue
+        return []
+
+    def _extract_lecture_title(self, lecture_element) -> str:
+        """강의 제목 추출"""
         try:
-            title_selectors = [
-                "span[data-purpose='item-title']",
-                ".curriculum-item-title",
-                ".lecture-name",
-                "span"
-            ]
-
-            for selector in title_selectors:
+            for selector in UdemySelectors.LECTURE_TITLES:
                 try:
-                    title_element = video_element.find_element(By.CSS_SELECTOR, selector)
-                    title = title_element.text.strip()
-                    if title:
-                        return title
+                    title_element = lecture_element.find_element(By.CSS_SELECTOR, selector)
+                    if title_element and title_element.text:
+                        title = title_element.text.strip()
+                        if title and not title.startswith("재생") and not title.startswith("시작"):
+                            # 번호 제거
+                            if ". " in title:
+                                title = title.split(". ", 1)[1]
+                            return title
                 except:
                     continue
+
+            # 전체 텍스트에서 추출 시도
+            full_text = lecture_element.text
+            if full_text:
+                lines = full_text.split('\\n')
+                for line in lines:
+                    if line and not line.startswith("재생") and not line.startswith("시작") and "분" not in line:
+                        if ". " in line:
+                            line = line.split(". ", 1)[1]
+                        return line
 
             return f"비디오_{int(time.time())}"
 
         except:
             return f"비디오_{int(time.time())}"
-
-    def _click_video(self, video_element) -> bool:
-        """비디오 클릭"""
-        try:
-            # 클릭 가능한 요소 찾기
-            clickable_selectors = [
-                "a",
-                "button",
-                "span[data-purpose='item-title']"
-            ]
-
-            for selector in clickable_selectors:
-                try:
-                    clickable = video_element.find_element(By.CSS_SELECTOR, selector)
-                    if clickable.is_displayed():
-                        clickable.click()
-                        return True
-                except:
-                    continue
-
-            # 직접 클릭
-            video_element.click()
-            return True
-
-        except Exception as e:
-            return False
-
-    def _wait_for_video_page(self) -> bool:
-        """비디오 페이지 로딩 대기"""
-        try:
-            # URL이 lecture을 포함하는지 확인
-            for i in range(10):
-                if 'lecture' in self.driver.current_url:
-                    time.sleep(2)  # 추가 로딩 대기
-                    return True
-                time.sleep(1)
-
-            return False
-
-        except:
-            return False
-
-    def _open_transcript_panel(self) -> bool:
-        """자막 패널 열기"""
-        try:
-            # 자막 버튼 찾기
-            transcript_selectors = [
-                "button[data-purpose='transcript-toggle']",
-                ".transcript-button",
-                "button:contains('Transcript')",
-                "button:contains('자막')"
-            ]
-
-            for selector in transcript_selectors:
-                try:
-                    if selector.startswith("button:contains"):
-                        # contains 사용 시 XPath로 변환
-                        text = selector.split("'")[1]
-                        xpath_selector = f"//button[contains(text(), '{text}')]"
-                        transcript_button = self.driver.find_element(By.XPATH, xpath_selector)
-                    else:
-                        transcript_button = self.driver.find_element(By.CSS_SELECTOR, selector)
-
-                    if transcript_button.is_displayed():
-                        transcript_button.click()
-                        time.sleep(2)
-                        return True
-                except:
-                    continue
-
-            return False
-
-        except:
-            return False
-
-    def _extract_transcript_content(self) -> Optional[str]:
-        """자막 내용 추출"""
-        try:
-            # 자막 패널이 열릴 때까지 대기
-            time.sleep(2)
-
-            # 자막 컨테이너 찾기
-            transcript_selectors = [
-                ".transcript-container",
-                "[data-purpose='transcript']",
-                ".transcript-content",
-                ".captions-display"
-            ]
-
-            transcript_container = None
-            for selector in transcript_selectors:
-                try:
-                    container = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if container.is_displayed():
-                        transcript_container = container
-                        break
-                except:
-                    continue
-
-            if not transcript_container:
-                return None
-
-            # 자막 텍스트 추출
-            transcript_elements = transcript_container.find_elements(By.CSS_SELECTOR,
-                ".transcript-cue, .caption-line, p, div")
-
-            if transcript_elements:
-                transcript_lines = []
-                for element in transcript_elements:
-                    text = element.text.strip()
-                    if text:
-                        transcript_lines.append(text)
-
-                return "\n".join(transcript_lines)
-
-            # 전체 텍스트 추출
-            return transcript_container.text.strip()
-
-        except Exception as e:
-            return None
 
     def _save_transcript(self, content: str, video_title: str, section_idx: int, video_idx: int):
-        """자막 파일 저장"""
+        """트랜스크립트 파일 저장"""
         try:
+            if not self.current_course:
+                self.log_callback("    ⚠️ 강의 정보가 없어 파일 저장 실패")
+                return
+
+            from pathlib import Path
+
             # 출력 디렉토리 생성
-            output_dir = Config.get_output_directory()
-            section_dir = output_dir / f"Section_{section_idx + 1:02d}"
+            output_dir = Path("output")
+            ensure_directory(output_dir)
+
+            # 강의명 폴더 생성
+            safe_course_name = sanitize_filename(self.current_course.title)
+            course_dir = output_dir / safe_course_name
+            ensure_directory(course_dir)
+
+            # 섹션 디렉토리 생성
+            section_dir = course_dir / f"Section_{section_idx + 1:02d}"
             ensure_directory(section_dir)
 
             # 파일명 생성
@@ -418,8 +303,8 @@ class TranscriptScraper(BrowserBase):
 
             # 파일 저장
             with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(f"Video: {video_title}\n")
-                f.write("=" * 50 + "\n\n")
+                f.write(f"Video: {video_title}\\n")
+                f.write("=" * 50 + "\\n\\n")
                 f.write(content)
 
             self.log_callback(f"    💾 저장완료: {filename}")
@@ -427,24 +312,19 @@ class TranscriptScraper(BrowserBase):
         except Exception as e:
             self.log_callback(f"    ❌ 파일 저장 실패: {str(e)}")
 
-    def _close_transcript_panel(self):
-        """자막 패널 닫기"""
+    def _return_to_section_list(self):
+        """섹션 목록으로 돌아가기"""
         try:
-            # 같은 버튼을 다시 클릭하거나 닫기 버튼 클릭
-            close_selectors = [
-                "button[data-purpose='transcript-toggle']",
-                ".transcript-close",
-                ".close-button"
-            ]
+            # 트랜스크립트 패널을 닫으면 자동으로 섹션 목록으로 돌아감
+            self.transcript_extractor.close_transcript_panel()
+        except Exception as e:
+            self.log_callback(f"    ⚠️ 섹션 목록으로 돌아가기 실패: {str(e)}")
 
-            for selector in close_selectors:
-                try:
-                    close_button = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if close_button.is_displayed():
-                        close_button.click()
-                        break
-                except:
-                    continue
+    # 기존 메서드들과의 호환성을 위한 메서드들
+    def _find_transcript_button(self):
+        """호환성을 위한 메서드"""
+        return self.element_finder.find_transcript_button()
 
-        except:
-            pass
+    def _find_video_area(self):
+        """호환성을 위한 메서드"""
+        return self.element_finder.find_video_area()
