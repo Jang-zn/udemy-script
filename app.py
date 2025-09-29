@@ -7,7 +7,7 @@ from typing import Callable, Optional
 from config import Config
 from browser.auth import UdemyAuth
 from browser.navigation import UdemyNavigator
-from browser.scraper import SubtitleScraper
+from browser.transcript_scraper import TranscriptScraper
 from utils.file_utils import MarkdownGenerator
 from core.models import Course, ScrapingProgress
 
@@ -37,15 +37,13 @@ class UdemyScraperApp:
         # 진행 상황 추적
         self.progress = ScrapingProgress()
         
-    def run_workflow(self, email: str, password: str, course_name: str) -> bool:
+    def run_workflow(self, course_name: str) -> bool:
         """
         전체 스크래핑 워크플로우 실행
-        
+
         Args:
-            email: Udemy 계정 이메일
-            password: Udemy 계정 비밀번호  
             course_name: 추출할 강의명
-            
+
         Returns:
             bool: 성공 여부
         """
@@ -54,28 +52,23 @@ class UdemyScraperApp:
             if not self._initialize_components():
                 return False
             
-            # 2. 로그인
-            self.status_callback("로그인 중...")
-            if not self._login(email, password):
-                return False
-            
-            # 3. 강의 선택
+            # 2. 강의 선택
             self.status_callback("강의 검색 중...")
             course = self._select_course(course_name)
             if not course:
                 return False
             
-            # 4. 강의 구조 분석
+            # 3. 강의 구조 분석
             self.status_callback("강의 구조 분석 중...")
             if not self._analyze_course_structure(course):
                 return False
-            
-            # 5. 자막 추출
+
+            # 4. 자막 추출
             self.status_callback("자막 추출 시작...")
             if not self._extract_all_subtitles(course):
                 return False
-            
-            # 6. 파일 저장
+
+            # 5. 파일 저장
             self.status_callback("파일 저장 중...")
             if not self._save_course_files(course, course_name):
                 return False
@@ -102,7 +95,7 @@ class UdemyScraperApp:
                 headless=Config.HEADLESS_MODE,
                 log_callback=self.log_callback
             )
-            
+
             if not self.auth.setup_driver():
                 self.log_callback("❌ 브라우저 초기화 실패")
                 return False
@@ -114,7 +107,7 @@ class UdemyScraperApp:
                 log_callback=self.log_callback
             )
             
-            self.scraper = SubtitleScraper(
+            self.scraper = TranscriptScraper(
                 driver=self.auth.driver,
                 wait=self.auth.wait,
                 log_callback=self.log_callback
@@ -129,20 +122,6 @@ class UdemyScraperApp:
             
         except Exception as e:
             self.log_callback(f"❌ 컴포넌트 초기화 실패: {str(e)}")
-            return False
-    
-    def _login(self, email: str, password: str) -> bool:
-        """로그인 처리"""
-        try:
-            success = self.auth.semi_automatic_login(email, password)
-            if success:
-                self.log_callback("✅ 로그인 성공")
-            else:
-                self.log_callback("❌ 로그인 실패")
-            return success
-            
-        except Exception as e:
-            self.log_callback(f"❌ 로그인 처리 중 오류: {str(e)}")
             return False
     
     def _select_course(self, course_name: str) -> Optional[Course]:
@@ -187,52 +166,25 @@ class UdemyScraperApp:
             return False
     
     def _extract_all_subtitles(self, course: Course) -> bool:
-        """모든 강의의 자막 추출"""
+        """모든 강의의 자막 추출 (리팩토링된 TranscriptScraper 사용)"""
         try:
             self.log_callback("🎬 자막 추출 시작...")
-            
-            for section_idx, section in enumerate(course.sections):
-                self.progress.current_section = section_idx + 1
-                self.log_callback(f"\n📁 섹션 {section_idx + 1}/{course.total_sections}: {section.title}")
-                
-                for lecture_idx, lecture in enumerate(section.lectures):
-                    self.progress.current_lecture = lecture_idx + 1
-                    
-                    # 진행률 업데이트
-                    self.progress_callback(
-                        self.progress.completed_lectures,
-                        self.progress.total_lectures
-                    )
-                    
-                    self.log_callback(f"  🎥 강의 {lecture_idx + 1}/{section.lecture_count}: {lecture.title}")
-                    
-                    # 자막 추출
-                    success = self.scraper.extract_lecture_subtitles(lecture)
-                    if success:
-                        self.log_callback(f"     ✅ 자막 추출 완료 ({len(lecture.subtitles)}개 항목)")
-                        self.progress.completed_lectures += 1
-                    else:
-                        self.log_callback(f"     ⚠️ 자막 추출 실패 또는 자막 없음")
-                        self.progress.add_error(f"섹션 {section_idx + 1}, 강의 {lecture_idx + 1}: 자막 추출 실패")
-                    
-                    # 강의 간 대기
-                    delay = Config.BETWEEN_LECTURES_DELAY
-                    wait_time = delay[0] + (delay[1] - delay[0]) * __import__('random').random()
-                    time.sleep(wait_time)
-                
-                self.log_callback(f"✅ 섹션 {section_idx + 1} 완료")
-            
-            # 최종 진행률 업데이트
-            self.progress_callback(
-                self.progress.completed_lectures,
-                self.progress.total_lectures
-            )
-            
-            self.log_callback(f"\n🎉 자막 추출 완료! ({self.progress.completed_lectures}/{self.progress.total_lectures})")
-            if self.progress.errors:
-                self.log_callback(f"⚠️ {len(self.progress.errors)}개의 오류가 발생했습니다.")
-            
-            return True
+
+            # 새로운 TranscriptScraper의 전체 워크플로우 사용
+            success = self.scraper.start_complete_scraping_workflow(course)
+
+            if success:
+                # 진행률 업데이트 (완료로 설정)
+                self.progress.completed_lectures = self.progress.total_lectures
+                self.progress_callback(
+                    self.progress.completed_lectures,
+                    self.progress.total_lectures
+                )
+                self.log_callback("✅ 모든 강의 자막 추출 완료")
+            else:
+                self.log_callback("❌ 자막 추출 중 오류 발생")
+
+            return success
             
         except Exception as e:
             self.log_callback(f"❌ 자막 추출 중 오류: {str(e)}")

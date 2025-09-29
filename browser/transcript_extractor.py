@@ -8,6 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from .selectors import UdemySelectors, ClickStrategies
 from .element_finder import ElementFinder, ClickHandler
+from .smart_waiter import SmartWaiter
 
 
 class TranscriptExtractor:
@@ -19,6 +20,7 @@ class TranscriptExtractor:
         self.log_callback = log_callback or print
         self.element_finder = ElementFinder(driver, wait, log_callback)
         self.click_handler = ClickHandler(driver, log_callback)
+        self.smart_waiter = SmartWaiter(driver, wait, log_callback)
 
     def extract_transcript_from_video(self) -> Optional[str]:
         """비디오에서 트랜스크립트 추출 (전체 워크플로우)"""
@@ -75,9 +77,8 @@ class TranscriptExtractor:
                 self.log_callback("    ❌ 트랜스크립트 버튼 클릭 실패")
                 return False
 
-            # 5. 패널 열릴 때까지 대기
-            if self._wait_for_panel_open(transcript_button):
-                self.log_callback("    ✅ 트랜스크립트 패널 열기 완료")
+            # 5. 패널 열릴 때까지 스마트 대기
+            if self.smart_waiter.wait_for_transcript_panel_open(transcript_button):
                 return True
             else:
                 self.log_callback("    ❌ 트랜스크립트 패널 열기 실패")
@@ -113,13 +114,17 @@ class TranscriptExtractor:
                 self.log_callback("    ℹ️ 트랜스크립트 패널이 이미 닫혀있습니다.")
                 return True
 
-            # 4. 패널 닫기
+            # 4. 패널 닫기 및 스마트 대기
             if self.click_handler.click_element_with_strategies(transcript_button, scroll_to_view=False):
-                time.sleep(2)
-                self.log_callback("    ✅ 트랜스크립트 패널 닫기 완료")
-                return True
+                # 패널이 닫히고 섹션 영역이 나타날 때까지 대기
+                if self.smart_waiter.wait_for_transcript_panel_close(transcript_button):
+                    self.log_callback("    ✅ 트랜스크립트 패널 닫기 완료 → 섹션 영역 복귀")
+                    return True
+                else:
+                    self.log_callback("    ⚠️ 패널은 닫혔으나 섹션 영역 복귀 대기 시간 초과")
+                    return True  # 패널은 닫혔으므로 부분적 성공
             else:
-                self.log_callback("    ❌ 트랜스크립트 패널 닫기 실패")
+                self.log_callback("    ❌ 트랜스크립트 버튼 클릭 실패")
                 return False
 
         except Exception as e:
@@ -259,36 +264,8 @@ class VideoNavigator:
         self.driver = driver
         self.wait = wait
         self.log_callback = log_callback or print
+        self.smart_waiter = SmartWaiter(driver, wait, log_callback)
 
     def wait_for_video_page_load(self) -> bool:
-        """비디오 페이지 로딩 대기"""
-        try:
-            # URL이 lecture을 포함할 때까지 대기 (최대 5초)
-            for i in range(5):
-                if 'lecture' in self.driver.current_url:
-                    break
-                time.sleep(1)
-            else:
-                return False
-
-            # 페이지 로딩 대기
-            time.sleep(2)
-
-            # 비디오 플레이어가 로드될 때까지 추가 대기
-            try:
-                self.wait.until(
-                    EC.presence_of_element_located((
-                        By.CSS_SELECTOR,
-                        ", ".join(UdemySelectors.VIDEO_AREAS)
-                    ))
-                )
-            except:
-                # 문서 강의일 수도 있으므로 실패해도 계속
-                pass
-
-            # 추가 안정화 대기
-            time.sleep(1)
-            return True
-
-        except:
-            return False
+        """비디오 페이지 로딩 대기 (스마트 대기)"""
+        return self.smart_waiter.wait_for_video_page_ready()

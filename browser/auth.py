@@ -46,9 +46,11 @@ class UdemyAuth:
             # User-Agent 설정
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
-            # Chrome 프로필 사용 (쿠키 저장)
+            # 기존 Chrome 프로필 사용 (로그인 상태 유지)
+            import os
+            user_data_dir = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+            chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
             chrome_options.add_argument("--profile-directory=Default")
-            chrome_options.add_argument("--user-data-dir=/tmp/chrome_profile_udemy")
 
             if self.headless:
                 chrome_options.add_argument("--headless")

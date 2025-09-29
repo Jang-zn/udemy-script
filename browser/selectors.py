@@ -79,9 +79,30 @@ class UdemySelectors:
 
     # === 강의 목록 관련 ===
     LECTURE_ITEMS = [
+        # 기본 강의 아이템
         "[data-purpose^='curriculum-item-lecture-']",
+        "[data-purpose*='curriculum-item']",
         ".curriculum-item-link",
-        ".lecture-item"
+        ".curriculum-item",
+        ".lecture-item",
+
+        # 링크 기반
+        "a[href*='lecture']",
+        "a[href*='/learn/']",
+
+        # 버튼 기반
+        "button[data-purpose*='curriculum']",
+        "button[aria-label*='재생']",
+        "button[aria-label*='강의']",
+        "button[aria-label*='Play']",
+
+        # 광범위한 후보
+        "*[title*='분']",
+        "*[data-purpose*='item']",
+        ".item-link",
+
+        # 최후의 수단 - 모든 클릭 가능한 요소
+        "a", "button"
     ]
 
     LECTURE_TITLES = [

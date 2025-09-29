@@ -13,6 +13,7 @@ from .base import BrowserBase
 from .element_finder import ElementFinder, ClickHandler, SectionNavigator
 from .transcript_extractor import TranscriptExtractor, VideoNavigator
 from .selectors import UdemySelectors
+from .smart_waiter import SmartWaiter
 
 
 class TranscriptScraper(BrowserBase):
@@ -28,6 +29,7 @@ class TranscriptScraper(BrowserBase):
         self.section_navigator = SectionNavigator(driver, wait, log_callback)
         self.transcript_extractor = TranscriptExtractor(driver, wait, log_callback)
         self.video_navigator = VideoNavigator(driver, wait, log_callback)
+        self.smart_waiter = SmartWaiter(driver, wait, log_callback)
 
     def start_complete_scraping_workflow(self, course: Course) -> bool:
         """전체 스크래핑 워크플로우 시작"""
@@ -152,16 +154,35 @@ class TranscriptScraper(BrowserBase):
             lecture_elements = self._find_lecture_elements(section_content)
             if not lecture_elements:
                 self.log_callback(f"❌ 섹션 {section_idx + 1}에서 강의를 찾을 수 없음")
+                # 디버깅: 섹션 내용 구조 확인
+                self._debug_section_structure(section_content, section_idx)
                 return False
 
             self.log_callback(f"🔍 섹션 {section_idx + 1}에서 {len(lecture_elements)}개 강의 발견")
 
-            # 각 강의 처리
+            # 각 강의 처리 (스마트 대기 적용)
             success_count = 0
             skip_count = 0
 
-            for lecture_idx, lecture_element in enumerate(lecture_elements):
-                result = self._process_single_lecture(lecture_element, lecture_idx, section_idx)
+            for lecture_idx in range(len(lecture_elements)):
+                # 각 강의마다 DOM에서 최신 요소를 다시 찾기 (stale element 방지)
+                # 섹션 콘텐츠 영역도 다시 찾기
+                fresh_section_content = self._find_section_content_area(section_idx)
+                if not fresh_section_content:
+                    self.log_callback(f"  ⚠️ 섹션 {section_idx + 1} 콘텐츠 영역을 다시 찾을 수 없음 - 건너뜀")
+                    skip_count += 1
+                    continue
+
+                fresh_lecture_elements = self._find_lecture_elements(fresh_section_content)
+                if not fresh_lecture_elements or len(fresh_lecture_elements) <= lecture_idx:
+                    self.log_callback(f"  ⚠️ 강의 {lecture_idx + 1} 요소를 다시 찾을 수 없음 - 건너뜀")
+                    skip_count += 1
+                    continue
+
+                current_lecture_element = fresh_lecture_elements[lecture_idx]
+
+                # 강의 처리
+                result = self._process_single_lecture(current_lecture_element, lecture_idx, section_idx, fresh_section_content)
 
                 if result == "success":
                     success_count += 1
@@ -178,17 +199,21 @@ class TranscriptScraper(BrowserBase):
             self.log_callback(f"❌ 섹션 {section_idx + 1} 비디오 처리 실패: {str(e)}")
             return False
 
-    def _process_single_lecture(self, lecture_element, lecture_idx: int, section_idx: int) -> str:
+    def _process_single_lecture(self, lecture_element, lecture_idx: int, section_idx: int, section_content=None) -> str:
         """개별 강의 처리"""
         try:
             # 강의 제목 추출
             lecture_title = self._extract_lecture_title(lecture_element)
             self.log_callback(f"  📚 강의 {lecture_idx + 1}: {lecture_title}")
 
-            # 강의 클릭
+            # 강의 클릭 (디버깅 추가)
+            self.log_callback(f"    🖱️ 강의 {lecture_idx + 1} 클릭 시도 중...")
             if not self.click_handler.click_lecture_item(lecture_element):
-                self.log_callback(f"    ⚠️ 강의 클릭 실패 - 건너뜀")
+                self.log_callback(f"    ❌ 강의 클릭 실패")
+                # 클릭 실패 원인 디버깅
+                self._debug_click_failure(lecture_element, lecture_idx)
                 return "skip"
+            self.log_callback(f"    ✅ 강의 {lecture_idx + 1} 클릭 성공")
 
             # 페이지 로딩 대기
             if not self.video_navigator.wait_for_video_page_load():
@@ -204,11 +229,13 @@ class TranscriptScraper(BrowserBase):
             # 파일 저장
             self._save_transcript(transcript_content, lecture_title, section_idx, lecture_idx)
 
-            # 섹션 목록으로 돌아가기
-            self._return_to_section_list()
-
-            self.log_callback(f"    ✅ 강의 {lecture_idx + 1} 자막 추출 완료")
-            return "success"
+            # 섹션 목록으로 돌아가기 (스마트 대기)
+            if self._return_to_section_list_smart(section_content):
+                self.log_callback(f"    ✅ 강의 {lecture_idx + 1} 자막 추출 완료")
+                return "success"
+            else:
+                self.log_callback(f"    ⚠️ 강의 {lecture_idx + 1} 자막 추출했으나 섹션 복귀 실패")
+                return "success"  # 자막은 추출했으므로 성공으로 처리
 
         except Exception as e:
             self.log_callback(f"    ❌ 강의 {lecture_idx + 1} 처리 중 오류: {str(e)}")
@@ -233,15 +260,69 @@ class TranscriptScraper(BrowserBase):
         return None
 
     def _find_lecture_elements(self, section_content):
-        """강의 요소들 찾기"""
+        """강의 요소들 찾기 (개선된 로직)"""
         for selector in UdemySelectors.LECTURE_ITEMS:
             try:
                 elements = section_content.find_elements(By.CSS_SELECTOR, selector)
                 if elements:
-                    return elements
-            except:
+                    # 강의 요소인지 필터링
+                    valid_elements = []
+                    for elem in elements:
+                        if self._is_valid_lecture_element(elem):
+                            valid_elements.append(elem)
+
+                    if valid_elements:
+                        self.log_callback(f"      '{selector}': {len(valid_elements)}개 유효한 강의 발견 (전체 {len(elements)}개 중)")
+                        return valid_elements
+
+            except Exception as e:
+                self.log_callback(f"      '{selector}' 검색 오류: {str(e)}")
                 continue
+
         return []
+
+    def _is_valid_lecture_element(self, element) -> bool:
+        """요소가 유효한 강의 요소인지 확인"""
+        try:
+            # 요소가 보이고 활성화되어 있는지 확인 (stale element 방지)
+            try:
+                if not element.is_displayed():
+                    return False
+            except:
+                # stale element인 경우 무효한 요소로 처리
+                return False
+
+            # 텍스트나 속성에서 강의 관련 단서 찾기 (stale element 방지)
+            try:
+                element_text = element.text.lower() if element.text else ""
+                href = element.get_attribute('href') or ""
+                data_purpose = element.get_attribute('data-purpose') or ""
+                aria_label = element.get_attribute('aria-label') or ""
+                title = element.get_attribute('title') or ""
+            except:
+                # stale element인 경우 무효한 요소로 처리
+                return False
+
+            # 강의 관련 키워드 확인
+            lecture_keywords = ["lecture", "강의", "재생", "play", "분", "시간", "video"]
+            all_text = f"{element_text} {href} {data_purpose} {aria_label} {title}".lower()
+
+            for keyword in lecture_keywords:
+                if keyword in all_text:
+                    return True
+
+            # curriculum-item이 포함된 경우
+            if "curriculum-item" in data_purpose:
+                return True
+
+            # href에 lecture가 포함된 경우
+            if "lecture" in href or "/learn/" in href:
+                return True
+
+            return False
+
+        except:
+            return False
 
     def _extract_lecture_title(self, lecture_element) -> str:
         """강의 제목 추출"""
@@ -313,12 +394,29 @@ class TranscriptScraper(BrowserBase):
             self.log_callback(f"    ❌ 파일 저장 실패: {str(e)}")
 
     def _return_to_section_list(self):
-        """섹션 목록으로 돌아가기"""
+        """섹션 목록으로 돌아가기 (기존 방식)"""
         try:
             # 트랜스크립트 패널을 닫으면 자동으로 섹션 목록으로 돌아감
             self.transcript_extractor.close_transcript_panel()
         except Exception as e:
             self.log_callback(f"    ⚠️ 섹션 목록으로 돌아가기 실패: {str(e)}")
+
+    def _return_to_section_list_smart(self, section_content=None) -> bool:
+        """섹션 목록으로 돌아가기 (스마트 대기)"""
+        try:
+            self.log_callback("    🔄 섹션 목록으로 복귀 중...")
+
+            # 트랜스크립트 패널 닫기 (스마트 대기 적용)
+            if self.transcript_extractor.close_transcript_panel():
+                self.log_callback("    ✅ 섹션 목록 복귀 완료")
+                return True
+            else:
+                self.log_callback("    ⚠️ 섹션 목록 복귀 부분 실패")
+                return False
+
+        except Exception as e:
+            self.log_callback(f"    ❌ 섹션 목록 복귀 실패: {str(e)}")
+            return False
 
     # 기존 메서드들과의 호환성을 위한 메서드들
     def _find_transcript_button(self):
@@ -328,3 +426,100 @@ class TranscriptScraper(BrowserBase):
     def _find_video_area(self):
         """호환성을 위한 메서드"""
         return self.element_finder.find_video_area()
+
+    def _debug_section_structure(self, section_content, section_idx: int):
+        """섹션 구조 디버깅"""
+        try:
+            self.log_callback(f"🔍 섹션 {section_idx + 1} 구조 디버깅:")
+            self.log_callback(f"      섹션 태그: {section_content.tag_name}")
+            self.log_callback(f"      섹션 클래스: {section_content.get_attribute('class')}")
+            self.log_callback(f"      섹션 data-purpose: {section_content.get_attribute('data-purpose')}")
+
+            # 모든 하위 요소들 확인
+            all_children = section_content.find_elements(By.CSS_SELECTOR, "*")
+            self.log_callback(f"      전체 하위 요소 수: {len(all_children)}")
+
+            # 강의 관련 가능성이 있는 요소들 찾기
+            potential_lecture_selectors = [
+                "[data-purpose*='curriculum-item']",
+                "[data-purpose*='lecture']",
+                ".curriculum-item",
+                ".lecture",
+                "a[href*='lecture']",
+                "button[aria-label*='강의']",
+                "button[aria-label*='재생']",
+                "*[title*='분']"  # 시간 정보가 있는 요소
+            ]
+
+            for selector in potential_lecture_selectors:
+                try:
+                    elements = section_content.find_elements(By.CSS_SELECTOR, selector)
+                    if elements:
+                        self.log_callback(f"      '{selector}': {len(elements)}개 발견")
+                        for i, elem in enumerate(elements[:3]):  # 처음 3개만
+                            try:
+                                text_preview = elem.text[:50] if elem.text else "텍스트 없음"
+                                classes = elem.get_attribute('class') or "클래스 없음"
+                                data_purpose = elem.get_attribute('data-purpose') or "data-purpose 없음"
+                                self.log_callback(f"        {i+1}. [{elem.tag_name}] {text_preview} (class: {classes[:30]}, data: {data_purpose})")
+                            except:
+                                self.log_callback(f"        {i+1}. [정보 추출 실패]")
+                    else:
+                        self.log_callback(f"      '{selector}': 0개 발견")
+                except Exception as e:
+                    self.log_callback(f"      '{selector}': 오류 - {str(e)}")
+
+            # 텍스트 내용에서 강의 단서 찾기
+            section_text = section_content.text
+            if section_text:
+                if "분" in section_text or "강의" in section_text or "재생" in section_text:
+                    lines = section_text.split('\n')[:10]  # 처음 10줄만
+                    self.log_callback("      섹션 텍스트 미리보기:")
+                    for i, line in enumerate(lines):
+                        if line.strip():
+                            self.log_callback(f"        {i+1}. {line.strip()[:50]}")
+
+        except Exception as e:
+            self.log_callback(f"      ❌ 구조 디버깅 실패: {str(e)}")
+
+    def _debug_click_failure(self, lecture_element, lecture_idx: int):
+        """강의 클릭 실패 원인 디버깅"""
+        try:
+            self.log_callback(f"    🔍 강의 {lecture_idx + 1} 클릭 실패 원인 분석:")
+            self.log_callback(f"      태그: {lecture_element.tag_name}")
+            self.log_callback(f"      표시됨: {lecture_element.is_displayed()}")
+            self.log_callback(f"      활성화됨: {lecture_element.is_enabled()}")
+
+            # 기본 속성
+            classes = lecture_element.get_attribute('class') or 'None'
+            href = lecture_element.get_attribute('href') or 'None'
+            data_purpose = lecture_element.get_attribute('data-purpose') or 'None'
+
+            self.log_callback(f"      클래스: {classes[:50]}")
+            self.log_callback(f"      href: {href[:50]}")
+            self.log_callback(f"      data-purpose: {data_purpose}")
+
+            # 텍스트 확인
+            text = lecture_element.text[:100] if lecture_element.text else 'None'
+            self.log_callback(f"      텍스트: {text}")
+
+            # 클릭 가능한 하위 요소들 확인
+            from .selectors import UdemySelectors
+            for selector in UdemySelectors.LECTURE_CLICKABLE_ELEMENTS[:5]:  # 처음 5개만
+                try:
+                    elements = lecture_element.find_elements(By.CSS_SELECTOR, selector)
+                    visible_elements = [e for e in elements if e.is_displayed() and e.is_enabled()]
+                    if visible_elements:
+                        self.log_callback(f"      '{selector}': {len(visible_elements)}개 클릭 가능 요소 발견")
+                        break
+                except:
+                    continue
+            else:
+                self.log_callback(f"      ❌ 클릭 가능한 하위 요소를 찾을 수 없음")
+
+            # 현재 활성 강의 확인
+            is_current = lecture_element.get_attribute("aria-current") == "true"
+            self.log_callback(f"      현재 활성 강의: {is_current}")
+
+        except Exception as e:
+            self.log_callback(f"      ❌ 클릭 실패 디버깅 오류: {str(e)}")
