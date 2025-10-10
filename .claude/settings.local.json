@@ -6,7 +6,18 @@
       "Bash(tree:*)",
       "Bash(find:*)",
       "Bash(python3:*)",
-      "Bash(awk:*)"
+      "Bash(awk:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(split:*)",
+      "Read(//private/tmp/**)",
+      "Read(//tmp/**)",
+      "Bash(cat:*)",
+      "Bash(sed:*)",
+      "mcp__reference-servers__sequentialthinking"
     ],
     "deny": [],
     "ask": []

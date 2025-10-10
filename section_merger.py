@@ -81,11 +81,6 @@ class SectionMerger:
 
             print(f"    ✅ {output_file.name} 생성 완료 ({len(txt_files)}개 강의)")
 
-            # 통합 파일 생성 후 원본 섹션 폴더 삭제
-            import shutil
-            shutil.rmtree(section_dir)
-            print(f"    🗑️ {section_name} 폴더 삭제 완료")
-
             return True
 
         except Exception as e:
